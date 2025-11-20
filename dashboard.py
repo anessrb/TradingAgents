@@ -331,15 +331,14 @@ if status:
                     try:
                         hist_data = market_data['historical_data']
 
-                        # Convert to DataFrame - handle timestamp keys properly
-                        dates = list(hist_data['Close'].keys())
+                        # Convert to DataFrame - data is now in list format from backend
                         df = pd.DataFrame({
-                            'Date': pd.to_datetime([int(d)/1000000000 for d in dates], unit='s') if dates and isinstance(dates[0], (int, float)) else pd.to_datetime(dates),
-                            'Close': list(hist_data['Close'].values()),
-                            'Open': list(hist_data['Open'].values()),
-                            'High': list(hist_data['High'].values()),
-                            'Low': list(hist_data['Low'].values()),
-                            'Volume': list(hist_data['Volume'].values())
+                            'Date': pd.to_datetime(hist_data['Date']),
+                            'Open': hist_data['Open'],
+                            'High': hist_data['High'],
+                            'Low': hist_data['Low'],
+                            'Close': hist_data['Close'],
+                            'Volume': hist_data['Volume']
                         })
 
                         # Remove any NaN values
