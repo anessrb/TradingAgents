@@ -57,14 +57,14 @@ class TradingAgent:
     def analyze_with_ai(self, market_data: Dict) -> Dict:
         """Use Mistral AI to analyze market data and make trading decision"""
         if not self.client:
-            # Fallback: Simple momentum strategy
+            # Fallback: More aggressive momentum strategy
             change = market_data["change_percent"]
-            if change > 2:
-                return {"action": "BUY", "confidence": 0.7, "reasoning": "Positive momentum (fallback strategy)"}
-            elif change < -2:
-                return {"action": "SELL", "confidence": 0.6, "reasoning": "Negative momentum (fallback strategy)"}
+            if change > 0.5:
+                return {"action": "BUY", "confidence": 0.7, "reasoning": "Positive momentum (fallback strategy)", "suggested_quantity": 5}
+            elif change < -0.5:
+                return {"action": "SELL", "confidence": 0.6, "reasoning": "Negative momentum (fallback strategy)", "suggested_quantity": None}
             else:
-                return {"action": "HOLD", "confidence": 0.5, "reasoning": "Neutral market (fallback strategy)"}
+                return {"action": "HOLD", "confidence": 0.5, "reasoning": "Neutral market (fallback strategy)", "suggested_quantity": None}
 
         # Prepare prompt for Mistral
         prompt = f"""You are an expert trading analyst. Analyze the following market data and provide a trading recommendation.
@@ -102,6 +102,9 @@ Provide your response in the following JSON format:
             # Parse AI response
             ai_response = response.choices[0].message.content
 
+            # Store the raw AI response for logging
+            print(f"\n🤖 AI RAW RESPONSE:\n{ai_response}\n")
+
             # Try to extract JSON from response
             if "{" in ai_response and "}" in ai_response:
                 json_start = ai_response.index("{")
@@ -110,6 +113,9 @@ Provide your response in the following JSON format:
             else:
                 # Parse text response
                 decision = self._parse_text_response(ai_response)
+
+            # Store full AI response in decision
+            decision["ai_full_response"] = ai_response
 
             return decision
 
@@ -223,8 +229,8 @@ Provide your response in the following JSON format:
         print(f"🤖 AI Decision: {decision['action']} (Confidence: {decision['confidence']:.0%})")
         print(f"💭 Reasoning: {decision['reasoning']}")
 
-        # Execute trade if confidence is high enough
-        if decision['confidence'] >= 0.6:
+        # Execute trade if confidence is high enough (lowered threshold to be more active)
+        if decision['confidence'] >= 0.5:
             if decision['action'] == "BUY":
                 # Calculate quantity based on available balance
                 max_affordable = int(self.balance / market_data['current_price'])

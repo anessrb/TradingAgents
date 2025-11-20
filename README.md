@@ -56,12 +56,22 @@ The dashboard will open in your browser automatically!
 
 ## 🎮 How to Use
 
+### Quick Test (See AI Thinking in Terminal)
+
+Want to see what the AI is thinking? Run this test script:
+
+```bash
+python test_agent.py
+```
+
+This will show you the AI's raw decision-making process in the terminal!
+
 ### Initialize Your Agent
 
 1. In the sidebar, enter:
    - **Agent Name**: Give your agent a name (e.g., "MistralTrader")
    - **Initial Balance**: Set your virtual budget (e.g., $10,000)
-   - **API Key**: (Optional) Paste your Mistral API key
+   - **API Key**: Leave empty (your key is already saved in .env)
 2. Click "Initialize Agent"
 
 ### Make Trading Decisions
@@ -79,10 +89,21 @@ The dashboard will open in your browser automatically!
 
 ### Monitor Performance
 
+The dashboard now shows:
+- **🧠 AI Decision Panel**: See the latest AI decision with full reasoning (expanded by default)
+- **📝 Decision Log**: Track recent AI decisions with timestamps
 - **Portfolio Tab**: View current holdings, allocation, and performance summary
-- **Charts Tab**: Interactive candlestick charts and volume data
+- **Charts Tab**: Interactive candlestick charts and volume data (click "Load Chart" button)
 - **Trade History Tab**: Complete log of all trades with AI reasoning
 - **Market Analysis Tab**: Analyze any stock and get AI recommendations
+
+### Key Improvements
+
+✅ **See AI Thinking**: The dashboard now shows the full AI reasoning for every decision
+✅ **More Active Trading**: Lowered confidence threshold from 60% to 50%
+✅ **Better Charts**: Fixed chart display with proper error handling
+✅ **Decision Logging**: Track all recent decisions with timestamps
+✅ **Terminal Output**: Backend shows AI's raw responses in real-time
 
 ## 📁 Project Structure
 

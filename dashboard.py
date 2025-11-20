@@ -38,6 +38,10 @@ if 'agent_initialized' not in st.session_state:
     st.session_state.agent_initialized = False
 if 'auto_trade' not in st.session_state:
     st.session_state.auto_trade = False
+if 'last_decision' not in st.session_state:
+    st.session_state.last_decision = None
+if 'decision_log' not in st.session_state:
+    st.session_state.decision_log = []
 
 def check_backend():
     """Check if backend is running"""
@@ -157,6 +161,14 @@ with st.sidebar:
             with st.spinner(f"Analyzing {trade_symbol}..."):
                 decision = make_decision(trade_symbol)
                 if decision:
+                    st.session_state.last_decision = decision
+                    st.session_state.decision_log.insert(0, {
+                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        "symbol": trade_symbol,
+                        "decision": decision
+                    })
+                    # Keep only last 20 decisions
+                    st.session_state.decision_log = st.session_state.decision_log[:20]
                     st.success("Decision made! Check main panel for details.")
                     time.sleep(1)
                     st.rerun()
@@ -207,6 +219,38 @@ if status:
         st.metric("Holdings Value", f"${status['holdings_value']:,.2f}")
 
     st.markdown("---")
+
+    # AI Decision Panel - Show latest AI thinking
+    if st.session_state.last_decision:
+        with st.expander("🧠 Latest AI Decision", expanded=True):
+            dec = st.session_state.last_decision
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                action_color = "🟢" if dec['action'] == "BUY" else "🔴" if dec['action'] == "SELL" else "🟡"
+                st.markdown(f"### {action_color} **{dec['action']}**")
+            with col2:
+                st.metric("Confidence", f"{dec['confidence']:.0%}")
+            with col3:
+                st.metric("Suggested Qty", dec.get('suggested_quantity', 'N/A'))
+
+            st.markdown("**💭 AI Reasoning:**")
+            st.info(dec['reasoning'])
+
+            # Show full AI response if available
+            if 'ai_full_response' in dec:
+                with st.expander("🔍 Full AI Analysis"):
+                    st.text(dec['ai_full_response'])
+
+    # Decision Log
+    if st.session_state.decision_log:
+        with st.expander("📝 Recent Decisions Log", expanded=False):
+            for log_entry in st.session_state.decision_log[:10]:
+                dec = log_entry['decision']
+                action_emoji = "🟢" if dec['action'] == "BUY" else "🔴" if dec['action'] == "SELL" else "🟡"
+                st.markdown(f"**{log_entry['timestamp']}** - {log_entry['symbol']} - {action_emoji} **{dec['action']}** (Confidence: {dec['confidence']:.0%})")
+                st.caption(f"Reasoning: {dec['reasoning'][:100]}...")
+                st.markdown("---")
 
     # Main tabs
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Portfolio", "📈 Charts", "📜 Trade History", "🔍 Market Analysis"])
@@ -262,9 +306,14 @@ if status:
     with tab2:
         st.subheader("Market Charts")
 
+        # Allow viewing any stock, not just holdings
+        popular_for_charts = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META"]
+        holdings_symbols = [h['symbol'] for h in status['holdings']] if status['holdings'] else []
+        all_symbols = list(set(holdings_symbols + popular_for_charts))
+
         chart_symbol = st.selectbox(
             "Select symbol to view",
-            [h['symbol'] for h in status['holdings']] if status['holdings'] else ["AAPL"],
+            all_symbols,
             key="chart_symbol"
         )
 
@@ -274,55 +323,85 @@ if status:
             value="3mo"
         )
 
-        market_data = get_market_data(chart_symbol, period)
+        if st.button("📊 Load Chart"):
+            with st.spinner(f"Loading {chart_symbol} data..."):
+                market_data = get_market_data(chart_symbol, period)
 
-        if market_data and market_data.get('historical_data'):
-            hist_data = market_data['historical_data']
+                if market_data and market_data.get('historical_data'):
+                    try:
+                        hist_data = market_data['historical_data']
 
-            # Convert to DataFrame
-            df = pd.DataFrame({
-                'Date': pd.to_datetime(list(hist_data['Close'].keys())),
-                'Close': list(hist_data['Close'].values()),
-                'Open': list(hist_data['Open'].values()),
-                'High': list(hist_data['High'].values()),
-                'Low': list(hist_data['Low'].values()),
-                'Volume': list(hist_data['Volume'].values())
-            })
+                        # Convert to DataFrame - handle timestamp keys properly
+                        dates = list(hist_data['Close'].keys())
+                        df = pd.DataFrame({
+                            'Date': pd.to_datetime([int(d)/1000000000 for d in dates], unit='s') if dates and isinstance(dates[0], (int, float)) else pd.to_datetime(dates),
+                            'Close': list(hist_data['Close'].values()),
+                            'Open': list(hist_data['Open'].values()),
+                            'High': list(hist_data['High'].values()),
+                            'Low': list(hist_data['Low'].values()),
+                            'Volume': list(hist_data['Volume'].values())
+                        })
 
-            # Candlestick chart
-            fig = go.Figure(data=[go.Candlestick(
-                x=df['Date'],
-                open=df['Open'],
-                high=df['High'],
-                low=df['Low'],
-                close=df['Close'],
-                name=chart_symbol
-            )])
+                        # Remove any NaN values
+                        df = df.dropna()
 
-            fig.update_layout(
-                title=f"{chart_symbol} Price Chart",
-                xaxis_title="Date",
-                yaxis_title="Price ($)",
-                height=500
-            )
+                        if len(df) > 0:
+                            # Candlestick chart
+                            fig = go.Figure(data=[go.Candlestick(
+                                x=df['Date'],
+                                open=df['Open'],
+                                high=df['High'],
+                                low=df['Low'],
+                                close=df['Close'],
+                                name=chart_symbol
+                            )])
 
-            st.plotly_chart(fig, use_container_width=True)
+                            fig.update_layout(
+                                title=f"{chart_symbol} Price Chart",
+                                xaxis_title="Date",
+                                yaxis_title="Price ($)",
+                                height=500,
+                                xaxis_rangeslider_visible=False
+                            )
 
-            # Volume chart
-            fig_volume = go.Figure(data=[go.Bar(
-                x=df['Date'],
-                y=df['Volume'],
-                name='Volume'
-            )])
+                            st.plotly_chart(fig, use_container_width=True)
 
-            fig_volume.update_layout(
-                title=f"{chart_symbol} Volume",
-                xaxis_title="Date",
-                yaxis_title="Volume",
-                height=300
-            )
+                            # Volume chart
+                            fig_volume = go.Figure(data=[go.Bar(
+                                x=df['Date'],
+                                y=df['Volume'],
+                                name='Volume',
+                                marker_color='rgba(0, 123, 255, 0.5)'
+                            )])
 
-            st.plotly_chart(fig_volume, use_container_width=True)
+                            fig_volume.update_layout(
+                                title=f"{chart_symbol} Volume",
+                                xaxis_title="Date",
+                                yaxis_title="Volume",
+                                height=300
+                            )
+
+                            st.plotly_chart(fig_volume, use_container_width=True)
+
+                            # Show price statistics
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("Current", f"${df['Close'].iloc[-1]:.2f}")
+                            with col2:
+                                change = ((df['Close'].iloc[-1] - df['Close'].iloc[0]) / df['Close'].iloc[0] * 100)
+                                st.metric("Period Change", f"{change:.2f}%")
+                            with col3:
+                                st.metric("Period High", f"${df['High'].max():.2f}")
+                            with col4:
+                                st.metric("Period Low", f"${df['Low'].min():.2f}")
+                        else:
+                            st.error("No data available for this period")
+
+                    except Exception as e:
+                        st.error(f"Error displaying charts: {e}")
+                        st.write("Debug info:", market_data)
+                else:
+                    st.error(f"Could not fetch data for {chart_symbol}")
 
     with tab3:
         st.subheader("Trade History")
