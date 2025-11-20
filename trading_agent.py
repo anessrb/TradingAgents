@@ -2,8 +2,8 @@ import json
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
-import yfinance as yf
 from mistralai import Mistral
+from market_data_service import MarketDataService
 
 
 class TradingAgent:
@@ -26,44 +26,8 @@ class TradingAgent:
             print("⚠️ Warning: No Mistral API key provided. Agent will use fallback logic.")
 
     def get_market_data(self, symbol: str, period: str = "1mo") -> Dict:
-        """Fetch market data from Yahoo Finance"""
-        try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period=period)
-            info = ticker.info
-
-            if hist.empty:
-                return None
-
-            current_price = hist['Close'].iloc[-1]
-            prev_price = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
-
-            # Convert historical data to JSON-serializable format
-            hist_reset = hist.reset_index()
-            historical_data = {
-                "Date": [d.isoformat() for d in hist_reset['Date']],
-                "Open": hist_reset['Open'].tolist(),
-                "High": hist_reset['High'].tolist(),
-                "Low": hist_reset['Low'].tolist(),
-                "Close": hist_reset['Close'].tolist(),
-                "Volume": hist_reset['Volume'].tolist()
-            }
-
-            return {
-                "symbol": symbol,
-                "current_price": float(current_price),
-                "previous_close": float(prev_price),
-                "change_percent": ((current_price - prev_price) / prev_price * 100),
-                "volume": int(hist['Volume'].iloc[-1]),
-                "high_52w": float(hist['High'].max()),
-                "low_52w": float(hist['Low'].min()),
-                "company_name": info.get("longName", symbol),
-                "sector": info.get("sector", "N/A"),
-                "historical_data": historical_data
-            }
-        except Exception as e:
-            print(f"Error fetching data for {symbol}: {e}")
-            return None
+        """Fetch market data using MarketDataService"""
+        return MarketDataService.get_market_data(symbol, period)
 
     def analyze_with_ai(self, market_data: Dict) -> Dict:
         """Use Mistral AI to analyze market data and make trading decision"""

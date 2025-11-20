@@ -129,12 +129,13 @@ def get_trade_history():
     }
 
 @app.get("/market/{symbol}")
-def get_market_data(symbol: str, period: str = "1mo"):
-    """Get market data for a symbol"""
+def get_market_data(symbol: str, period: str = "1mo", interval: str = "1d"):
+    """Get market data for a symbol with custom interval for scalping"""
     if not agent:
         raise HTTPException(status_code=400, detail="Agent not initialized")
 
-    data = agent.get_market_data(symbol, period)
+    from market_data_service import MarketDataService
+    data = MarketDataService.get_market_data(symbol, period, interval)
     if not data:
         raise HTTPException(status_code=404, detail="Market data not found")
 
