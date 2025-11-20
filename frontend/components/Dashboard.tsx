@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { api, type AgentStatus, type Decision, type MarketData } from '@/lib/api';
 import { formatCurrency, formatPercent, formatNumber } from '@/lib/utils';
-import { TrendingUp, TrendingDown, Activity, DollarSign, Target, Zap, BarChart3, Clock } from 'lucide-react';
+import { TrendingUp, TrendingDown, Activity, DollarSign, Target, Zap, BarChart3, Clock, Plus, Trash2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 interface Props {
@@ -12,36 +12,81 @@ interface Props {
 }
 
 export default function Dashboard({ agentStatus, refreshStatus }: Props) {
-  const [selectedSymbol, setSelectedSymbol] = useState('AAPL');
+  const [watchlist, setWatchlist] = useState<string[]>(['AAPL', 'GOOGL', 'TSLA']);
+  const [newSymbol, setNewSymbol] = useState('');
   const [interval, setInterval] = useState<'1m' | '5m' | '15m' | '1d'>('1m');
   const [period, setPeriod] = useState('1d');
   const [isTrading, setIsTrading] = useState(false);
-  const [lastDecision, setLastDecision] = useState<(Decision & { symbol: string }) | null>(null);
-  const [marketData, setMarketData] = useState<MarketData | null>(null);
-  const [autoScalp, setAutoScalp] = useState(false);
+  const [lastDecisions, setLastDecisions] = useState<Map<string, Decision & { symbol: string }>>(new Map());
+  const [marketDataMap, setMarketDataMap] = useState<Map<string, MarketData>>(new Map());
+  const [autoTrade, setAutoTrade] = useState(false);
+  const [selectedSymbol, setSelectedSymbol] = useState('AAPL');
 
-  const popularStocks = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META'];
+  const popularStocks = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'JPM', 'V', 'WMT'];
 
-  // Fetch market data
-  const loadMarketData = async () => {
-    try {
-      const data = await api.getMarketData(selectedSymbol, period, interval);
-      setMarketData(data);
-    } catch (error) {
-      console.error('Failed to load market data:', error);
+  // Refresh balance every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshStatus();
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [refreshStatus]);
+
+  // Fetch market data for all watchlist symbols
+  const loadAllMarketData = async () => {
+    for (const symbol of watchlist) {
+      try {
+        const data = await api.getMarketData(symbol, period, interval);
+        setMarketDataMap(prev => new Map(prev).set(symbol, data));
+      } catch (error) {
+        console.error(`Failed to load ${symbol}:`, error);
+      }
     }
   };
 
   useEffect(() => {
-    loadMarketData();
-  }, [selectedSymbol, interval, period]);
+    loadAllMarketData();
+    const intervalId = setInterval(loadAllMarketData, 30000); // Refresh every 30s
+    return () => clearInterval(intervalId);
+  }, [watchlist, interval, period]);
 
-  // Make trading decision
-  const handleTrade = async () => {
+  // Auto-trade all symbols in watchlist
+  useEffect(() => {
+    if (!autoTrade) return;
+
+    const tradeAll = async () => {
+      for (const symbol of watchlist) {
+        try {
+          const decision = await api.makeDecision(symbol);
+          setLastDecisions(prev => new Map(prev).set(symbol, { ...decision, symbol }));
+          await refreshStatus();
+        } catch (error) {
+          console.error(`Failed to trade ${symbol}:`, error);
+        }
+      }
+    };
+
+    tradeAll(); // Initial trade
+    const intervalId = setInterval(tradeAll, interval === '1m' ? 60000 : interval === '5m' ? 300000 : 900000);
+    return () => clearInterval(intervalId);
+  }, [autoTrade, watchlist, interval]);
+
+  const handleAddSymbol = () => {
+    if (newSymbol && !watchlist.includes(newSymbol.toUpperCase())) {
+      setWatchlist([...watchlist, newSymbol.toUpperCase()]);
+      setNewSymbol('');
+    }
+  };
+
+  const handleRemoveSymbol = (symbol: string) => {
+    setWatchlist(watchlist.filter(s => s !== symbol));
+  };
+
+  const handleTradeOne = async (symbol: string) => {
     setIsTrading(true);
     try {
-      const decision = await api.makeDecision(selectedSymbol);
-      setLastDecision({ ...decision, symbol: selectedSymbol });
+      const decision = await api.makeDecision(symbol);
+      setLastDecisions(prev => new Map(prev).set(symbol, { ...decision, symbol }));
       await refreshStatus();
     } catch (error) {
       console.error('Trading failed:', error);
@@ -50,49 +95,37 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
     }
   };
 
-  // Auto-scalp every minute
-  useEffect(() => {
-    if (!autoScalp) return;
-
-    const intervalId = setInterval(async () => {
-      await handleTrade();
-    }, interval === '1m' ? 60000 : interval === '5m' ? 300000 : 900000);
-
-    return () => clearInterval(intervalId);
-  }, [autoScalp, interval]);
-
-  // Prepare chart data
-  const chartData = marketData?.historical_data.Date.map((date, i) => ({
+  const chartData = marketDataMap.get(selectedSymbol)?.historical_data.Date.map((date, i) => ({
     time: interval === '1d' ? date : date.split(' ')[1] || date,
-    price: marketData.historical_data.Close[i],
-    volume: marketData.historical_data.Volume[i],
-  })).slice(-100) || []; // Last 100 points
+    price: marketDataMap.get(selectedSymbol)!.historical_data.Close[i],
+    volume: marketDataMap.get(selectedSymbol)!.historical_data.Volume[i],
+  })).slice(-100) || [];
 
   const isProfit = agentStatus.total_return >= 0;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-slate-950">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
       {/* Header */}
-      <header className="bg-slate-900/50 backdrop-blur-xl border-b border-slate-800 sticky top-0 z-50">
+      <header className="bg-white/80 backdrop-blur-xl border-b border-gray-200 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="text-4xl">🤖</div>
               <div>
-                <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
-                  AI Scalping Dashboard
+                <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 bg-clip-text text-transparent">
+                  AI Trading Dashboard
                 </h1>
-                <p className="text-gray-400 text-sm">Agent: {agentStatus.name}</p>
+                <p className="text-gray-600 text-sm">Agent: {agentStatus.name}</p>
               </div>
             </div>
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 bg-green-500/10 px-4 py-2 rounded-full border border-green-500/30">
+              <div className="flex items-center gap-2 bg-green-100 px-4 py-2 rounded-full border border-green-300">
                 <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span className="text-green-400 text-sm font-medium">Live</span>
+                <span className="text-green-700 text-sm font-medium">Live</span>
               </div>
               <div className="text-right">
                 <div className="text-xs text-gray-500">Interval</div>
-                <div className="text-sm font-bold text-blue-400">{interval}</div>
+                <div className="text-sm font-bold text-blue-600">{interval}</div>
               </div>
             </div>
           </div>
@@ -108,6 +141,7 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
             value={formatCurrency(agentStatus.total_portfolio_value)}
             change={formatPercent(agentStatus.return_percentage)}
             isPositive={isProfit}
+            color="blue"
           />
           <StatCard
             icon={<TrendingUp className="w-6 h-6" />}
@@ -115,6 +149,7 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
             value={formatCurrency(agentStatus.total_return)}
             change={`${agentStatus.total_trades} trades`}
             isPositive={isProfit}
+            color="purple"
           />
           <StatCard
             icon={<Activity className="w-6 h-6" />}
@@ -122,6 +157,7 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
             value={formatCurrency(agentStatus.current_balance)}
             change={`${agentStatus.holdings.length} positions`}
             isPositive={true}
+            color="green"
           />
           <StatCard
             icon={<Target className="w-6 h-6" />}
@@ -129,71 +165,91 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
             value={formatCurrency(agentStatus.holdings_value)}
             change="Active trades"
             isPositive={agentStatus.holdings_value > 0}
+            color="pink"
           />
         </div>
 
-        {/* AI Decision Panel */}
-        {lastDecision && (
-          <div className="bg-gradient-to-r from-purple-900/20 via-blue-900/20 to-purple-900/20 backdrop-blur-xl border border-purple-500/30 rounded-2xl p-6 shadow-2xl">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  🧠 Latest AI Decision
-                  <span className="text-sm font-normal text-gray-400">({lastDecision.symbol})</span>
-                </h3>
-              </div>
-              <div className={`px-4 py-2 rounded-full font-bold ${
-                lastDecision.action === 'BUY' ? 'bg-green-500/20 text-green-400 border border-green-500/50' :
-                lastDecision.action === 'SELL' ? 'bg-red-500/20 text-red-400 border border-red-500/50' :
-                'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50'
-              }`}>
-                {lastDecision.action === 'BUY' ? '🟢' : lastDecision.action === 'SELL' ? '🔴' : '🟡'} {lastDecision.action}
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div>
-                <div className="text-gray-400 text-sm">Confidence</div>
-                <div className="text-2xl font-bold text-white">{(lastDecision.confidence * 100).toFixed(0)}%</div>
-              </div>
-              {lastDecision.suggested_quantity && (
-                <div>
-                  <div className="text-gray-400 text-sm">Suggested Quantity</div>
-                  <div className="text-2xl font-bold text-white">{lastDecision.suggested_quantity}</div>
-                </div>
-              )}
-            </div>
-            <div className="bg-slate-900/50 rounded-xl p-4">
-              <div className="text-gray-400 text-sm mb-2">💭 AI Reasoning:</div>
-              <div className="text-white">{lastDecision.reasoning}</div>
-            </div>
-          </div>
-        )}
-
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Trading Panel */}
+          {/* Watchlist & Control */}
           <div className="lg:col-span-1 space-y-4">
-            <div className="bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-2xl p-6">
-              <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                <Zap className="w-5 h-5 text-yellow-400" />
-                Scalping Control
+            {/* Watchlist Management */}
+            <div className="bg-white/80 backdrop-blur-xl border border-gray-200 rounded-2xl p-6 shadow-lg">
+              <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-blue-600" />
+                Watchlist
               </h3>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-2">Stock Symbol</label>
-                  <select
-                    value={selectedSymbol}
-                    onChange={(e) => setSelectedSymbol(e.target.value)}
-                    className="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  >
-                    {popularStocks.map(stock => (
-                      <option key={stock} value={stock}>{stock}</option>
-                    ))}
-                  </select>
-                </div>
+              <div className="flex gap-2 mb-4">
+                <input
+                  type="text"
+                  value={newSymbol}
+                  onChange={(e) => setNewSymbol(e.target.value.toUpperCase())}
+                  onKeyPress={(e) => e.key === 'Enter' && handleAddSymbol()}
+                  placeholder="Add symbol..."
+                  className="flex-1 px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  onClick={handleAddSymbol}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                >
+                  <Plus className="w-5 h-5" />
+                </button>
+              </div>
 
+              <div className="space-y-2">
+                {watchlist.map(symbol => {
+                  const data = marketDataMap.get(symbol);
+                  const decision = lastDecisions.get(symbol);
+                  return (
+                    <div key={symbol} className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-3 border border-gray-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <button
+                          onClick={() => setSelectedSymbol(symbol)}
+                          className={`font-bold text-lg ${selectedSymbol === symbol ? 'text-blue-600' : 'text-gray-800'}`}
+                        >
+                          {symbol}
+                        </button>
+                        <button
+                          onClick={() => handleRemoveSymbol(symbol)}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                      {data && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">${data.current_price.toFixed(2)}</span>
+                          <span className={data.change_percent >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                            {formatPercent(data.change_percent)}
+                          </span>
+                        </div>
+                      )}
+                      {decision && (
+                        <div className="mt-2 text-xs">
+                          <span className={`px-2 py-1 rounded-full font-medium ${
+                            decision.action === 'BUY' ? 'bg-green-100 text-green-700' :
+                            decision.action === 'SELL' ? 'bg-red-100 text-red-700' :
+                            'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {decision.action} ({(decision.confidence * 100).toFixed(0)}%)
+                          </span>
+                        </div>
+                      )}
+                      <button
+                        onClick={() => handleTradeOne(symbol)}
+                        disabled={isTrading}
+                        className="w-full mt-2 bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 text-white font-medium py-2 rounded-lg transition text-sm"
+                      >
+                        Trade
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-4 space-y-2">
                 <div>
-                  <label className="block text-sm text-gray-400 mb-2">Interval</label>
+                  <label className="block text-sm text-gray-600 mb-2">Interval</label>
                   <div className="grid grid-cols-4 gap-2">
                     {(['1m', '5m', '15m', '1d'] as const).map(int => (
                       <button
@@ -201,8 +257,8 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
                         onClick={() => setInterval(int)}
                         className={`py-2 rounded-lg font-medium transition ${
                           interval === int
-                            ? 'bg-blue-500 text-white'
-                            : 'bg-slate-800/50 text-gray-400 hover:bg-slate-700/50'
+                            ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                         }`}
                       >
                         {int}
@@ -211,74 +267,40 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
                   </div>
                 </div>
 
-                {marketData && (
-                  <div className="bg-slate-800/30 rounded-lg p-4 space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-gray-400 text-sm">Current Price</span>
-                      <span className="text-white font-bold">${marketData.current_price.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-400 text-sm">Change</span>
-                      <span className={marketData.change_percent >= 0 ? 'text-green-400' : 'text-red-400'}>
-                        {formatPercent(marketData.change_percent)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-400 text-sm">Volume</span>
-                      <span className="text-white text-sm">{formatNumber(marketData.volume)}</span>
-                    </div>
-                  </div>
-                )}
-
                 <button
-                  onClick={handleTrade}
-                  disabled={isTrading}
-                  className="w-full bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 text-white font-bold py-3 rounded-lg transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-                >
-                  {isTrading ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full"></div>
-                      Analyzing...
-                    </span>
-                  ) : (
-                    '🎲 Let AI Decide'
-                  )}
-                </button>
-
-                <button
-                  onClick={() => setAutoScalp(!autoScalp)}
-                  className={`w-full font-bold py-3 rounded-lg transition-all ${
-                    autoScalp
-                      ? 'bg-red-500 hover:bg-red-600 text-white'
-                      : 'bg-slate-800/50 hover:bg-slate-700/50 text-gray-300'
+                  onClick={() => setAutoTrade(!autoTrade)}
+                  className={`w-full font-bold py-3 rounded-lg transition-all shadow-lg ${
+                    autoTrade
+                      ? 'bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white'
+                      : 'bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 text-white'
                   }`}
                 >
-                  {autoScalp ? '⏹️ Stop Auto-Scalping' : '▶️ Start Auto-Scalping'}
+                  {autoTrade ? '⏹️ Stop Auto-Trading' : '▶️ Start Auto-Trading'}
                 </button>
 
-                {autoScalp && (
-                  <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-yellow-400 text-sm flex items-center gap-2">
+                {autoTrade && (
+                  <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-3 text-yellow-700 text-sm flex items-center gap-2">
                     <Clock className="w-4 h-4" />
-                    Auto-trading every {interval === '1m' ? '1 min' : interval === '5m' ? '5 min' : '15 min'}
+                    Trading {watchlist.length} stocks every {interval === '1m' ? '1 min' : interval === '5m' ? '5 min' : '15 min'}
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Holdings */}
+            {/* Portfolio Holdings */}
             {agentStatus.holdings.length > 0 && (
-              <div className="bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-2xl p-6">
-                <h3 className="text-xl font-bold text-white mb-4">Portfolio</h3>
+              <div className="bg-white/80 backdrop-blur-xl border border-gray-200 rounded-2xl p-6 shadow-lg">
+                <h3 className="text-xl font-bold text-gray-800 mb-4">Portfolio</h3>
                 <div className="space-y-3">
                   {agentStatus.holdings.map((holding) => (
-                    <div key={holding.symbol} className="bg-slate-800/30 rounded-lg p-3">
+                    <div key={holding.symbol} className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-3 border border-gray-200">
                       <div className="flex justify-between items-center mb-2">
-                        <span className="font-bold text-white">{holding.symbol}</span>
-                        <span className="text-sm text-gray-400">{holding.quantity} shares</span>
+                        <span className="font-bold text-gray-800">{holding.symbol}</span>
+                        <span className="text-sm text-gray-600">{holding.quantity} shares</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-400">P/L</span>
-                        <span className={holding.pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+                        <span className="text-gray-600">P/L</span>
+                        <span className={holding.pnl >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
                           {formatCurrency(holding.pnl)} ({formatPercent(holding.pnl_pct)})
                         </span>
                       </div>
@@ -289,17 +311,18 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
             )}
           </div>
 
-          {/* Chart */}
-          <div className="lg:col-span-2">
-            <div className="bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-2xl p-6">
+          {/* Chart & Decisions */}
+          <div className="lg:col-span-2 space-y-4">
+            {/* Chart */}
+            <div className="bg-white/80 backdrop-blur-xl border border-gray-200 rounded-2xl p-6 shadow-lg">
               <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  <BarChart3 className="w-5 h-5 text-blue-400" />
+                <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5 text-purple-600" />
                   {selectedSymbol} Chart ({interval})
                 </h3>
-                {marketData && (
-                  <div className="text-sm text-gray-400">
-                    {marketData.data_source === 'simulated' ? '⚠️ Simulated' : '✅ Real'} Data
+                {marketDataMap.get(selectedSymbol) && (
+                  <div className="text-sm text-gray-600">
+                    {marketDataMap.get(selectedSymbol)!.data_source === 'simulated' ? '⚠️ Simulated' : '✅ Real'} Data
                   </div>
                 )}
               </div>
@@ -311,75 +334,63 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
                       <AreaChart data={chartData}>
                         <defs>
                           <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                            <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.4}/>
+                            <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
                           </linearGradient>
                         </defs>
-                        <XAxis
-                          dataKey="time"
-                          stroke="#64748b"
-                          tick={{ fill: '#94a3b8', fontSize: 12 }}
-                          tickLine={false}
-                        />
-                        <YAxis
-                          domain={['auto', 'auto']}
-                          stroke="#64748b"
-                          tick={{ fill: '#94a3b8', fontSize: 12 }}
-                          tickLine={false}
-                          tickFormatter={(value) => `$${value.toFixed(2)}`}
-                        />
+                        <XAxis dataKey="time" stroke="#9ca3af" tick={{ fill: '#6b7280', fontSize: 12 }} tickLine={false} />
+                        <YAxis domain={['auto', 'auto']} stroke="#9ca3af" tick={{ fill: '#6b7280', fontSize: 12 }} tickLine={false} tickFormatter={(value) => `$${value.toFixed(2)}`} />
                         <Tooltip
-                          contentStyle={{
-                            backgroundColor: '#1e293b',
-                            border: '1px solid #334155',
-                            borderRadius: '8px',
-                            color: '#fff'
-                          }}
-                          labelStyle={{ color: '#94a3b8' }}
+                          contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #e5e7eb', borderRadius: '8px', color: '#000' }}
+                          labelStyle={{ color: '#6b7280' }}
                         />
-                        <Area
-                          type="monotone"
-                          dataKey="price"
-                          stroke="#3b82f6"
-                          strokeWidth={2}
-                          fillOpacity={1}
-                          fill="url(#colorPrice)"
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-
-                  <div className="h-32">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={chartData}>
-                        <XAxis dataKey="time" hide />
-                        <YAxis hide />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: '#1e293b',
-                            border: '1px solid #334155',
-                            borderRadius: '8px',
-                            color: '#fff'
-                          }}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="volume"
-                          stroke="#8b5cf6"
-                          strokeWidth={0}
-                          fillOpacity={0.6}
-                          fill="#8b5cf6"
-                        />
+                        <Area type="monotone" dataKey="price" stroke="#8b5cf6" strokeWidth={3} fillOpacity={1} fill="url(#colorPrice)" />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
                 </div>
               ) : (
-                <div className="h-96 flex items-center justify-center text-gray-500">
+                <div className="h-96 flex items-center justify-center text-gray-400">
                   Loading chart data...
                 </div>
               )}
             </div>
+
+            {/* AI Decisions */}
+            {Array.from(lastDecisions.values()).slice(0, 3).map(decision => (
+              <div key={decision.symbol} className="bg-gradient-to-r from-purple-100 via-blue-100 to-pink-100 backdrop-blur-xl border border-purple-300 rounded-2xl p-6 shadow-lg">
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                      🧠 {decision.symbol} Decision
+                    </h3>
+                  </div>
+                  <div className={`px-4 py-2 rounded-full font-bold ${
+                    decision.action === 'BUY' ? 'bg-green-200 text-green-800 border-2 border-green-400' :
+                    decision.action === 'SELL' ? 'bg-red-200 text-red-800 border-2 border-red-400' :
+                    'bg-yellow-200 text-yellow-800 border-2 border-yellow-400'
+                  }`}>
+                    {decision.action}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <div className="text-gray-600 text-sm">Confidence</div>
+                    <div className="text-2xl font-bold text-gray-800">{(decision.confidence * 100).toFixed(0)}%</div>
+                  </div>
+                  {decision.suggested_quantity && (
+                    <div>
+                      <div className="text-gray-600 text-sm">Quantity</div>
+                      <div className="text-2xl font-bold text-gray-800">{decision.suggested_quantity}</div>
+                    </div>
+                  )}
+                </div>
+                <div className="bg-white/60 rounded-xl p-4">
+                  <div className="text-gray-600 text-sm mb-2">💭 Reasoning:</div>
+                  <div className="text-gray-800">{decision.reasoning}</div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -387,27 +398,35 @@ export default function Dashboard({ agentStatus, refreshStatus }: Props) {
   );
 }
 
-function StatCard({ icon, label, value, change, isPositive }: {
+function StatCard({ icon, label, value, change, isPositive, color }: {
   icon: React.ReactNode;
   label: string;
   value: string;
   change: string;
   isPositive: boolean;
+  color: 'blue' | 'purple' | 'green' | 'pink';
 }) {
+  const colorClasses = {
+    blue: 'from-blue-100 to-blue-50 border-blue-200 text-blue-600',
+    purple: 'from-purple-100 to-purple-50 border-purple-200 text-purple-600',
+    green: 'from-green-100 to-green-50 border-green-200 text-green-600',
+    pink: 'from-pink-100 to-pink-50 border-pink-200 text-pink-600',
+  };
+
   return (
-    <div className="bg-gradient-to-br from-slate-900/90 to-slate-800/90 backdrop-blur-xl border border-slate-700 rounded-2xl p-6 hover:border-blue-500/50 transition-all">
+    <div className={`bg-gradient-to-br ${colorClasses[color]} backdrop-blur-xl border rounded-2xl p-6 hover:shadow-lg transition-all`}>
       <div className="flex items-center justify-between mb-4">
-        <div className="p-3 bg-blue-500/10 rounded-xl text-blue-400">
+        <div className={`p-3 bg-white/60 rounded-xl ${colorClasses[color].split(' ')[3]}`}>
           {icon}
         </div>
         <div className={`text-sm font-medium px-3 py-1 rounded-full ${
-          isPositive ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'
+          isPositive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
         }`}>
           {change}
         </div>
       </div>
-      <div className="text-gray-400 text-sm mb-1">{label}</div>
-      <div className="text-2xl font-bold text-white">{value}</div>
+      <div className="text-gray-600 text-sm mb-1">{label}</div>
+      <div className="text-2xl font-bold text-gray-800">{value}</div>
     </div>
   );
 }
