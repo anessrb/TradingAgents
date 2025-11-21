@@ -22,21 +22,25 @@ export default function Home() {
   }, []);
 
   // Fetch agent status
-  const refreshStatus = useCallback(async () => {
+  const refreshStatus = useCallback(async (showLoading = false) => {
     try {
-      setIsLoading(true);
+      if (showLoading) {
+        setIsLoading(true);
+      }
       const status = await api.getAgentStatus();
       setAgentStatus(status);
     } catch (error) {
       setAgentStatus(null);
     } finally {
-      setIsLoading(false);
+      if (showLoading) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (isBackendRunning) {
-      refreshStatus();
+      refreshStatus(true); // Show loading on initial fetch
     }
   }, [isBackendRunning, refreshStatus]);
 

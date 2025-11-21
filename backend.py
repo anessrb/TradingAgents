@@ -5,6 +5,10 @@ from typing import List, Optional, Dict
 import uvicorn
 from trading_agent import TradingAgent
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = FastAPI(title="Trading Agent API")
 

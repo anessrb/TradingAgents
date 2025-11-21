@@ -1,11 +1,15 @@
 """
-Market Data Service with fallback to generated realistic data
-Yahoo Finance API has been unreliable, so we generate realistic market data
+Market Data Service with multiple data sources
+1. Alpha Vantage (primary - real data)
+2. Yahoo Finance (fallback)
+3. Simulated data (last resort)
 """
 
 import random
+import os
+import requests
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 import yfinance as yf
 
 
@@ -27,7 +31,147 @@ class MarketDataService:
     }
 
     @staticmethod
-    def try_yahoo_finance(symbol: str, period: str = "1mo", interval: str = "1d") -> Dict:
+    def try_alpha_vantage(symbol: str, period: str = "1mo", interval: str = "1d") -> Optional[Dict]:
+        """Try to fetch from Alpha Vantage first (REAL market data)"""
+        api_key = os.getenv("ALPHA_VANTAGE_KEY")
+
+        if not api_key:
+            return None
+
+        try:
+            # Map our intervals to Alpha Vantage format
+            if interval in ["1m", "5m", "15m"]:
+                # Intraday data
+                av_interval_map = {"1m": "1min", "5m": "5min", "15m": "15min"}
+                av_interval = av_interval_map.get(interval, "1min")
+
+                url = f"https://www.alphavantage.co/query"
+                params = {
+                    "function": "TIME_SERIES_INTRADAY",
+                    "symbol": symbol,
+                    "interval": av_interval,
+                    "apikey": api_key,
+                    "outputsize": "full" if period != "1d" else "compact"
+                }
+            else:
+                # Daily data
+                url = f"https://www.alphavantage.co/query"
+                params = {
+                    "function": "TIME_SERIES_DAILY",
+                    "symbol": symbol,
+                    "apikey": api_key,
+                    "outputsize": "full" if period in ["6mo", "1y", "2y"] else "compact"
+                }
+
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+
+            # Check for errors
+            if "Error Message" in data:
+                print(f"Alpha Vantage error: {data['Error Message']}")
+                return None
+
+            if "Note" in data:
+                print(f"Alpha Vantage rate limit: {data['Note']}")
+                return None
+
+            # Extract time series data
+            if interval in ["1m", "5m", "15m"]:
+                time_series_key = f"Time Series ({av_interval})"
+            else:
+                time_series_key = "Time Series (Daily)"
+
+            if time_series_key not in data:
+                print(f"Alpha Vantage: No time series data found")
+                return None
+
+            time_series = data[time_series_key]
+
+            if not time_series:
+                return None
+
+            # Convert to our format
+            dates = []
+            opens = []
+            highs = []
+            lows = []
+            closes = []
+            volumes = []
+
+            # Sort by date (Alpha Vantage returns newest first)
+            sorted_dates = sorted(time_series.keys())
+
+            # Limit based on period
+            period_limits = {
+                "1d": 390 if interval == "1m" else 78 if interval == "5m" else 26,
+                "5d": 1950 if interval == "1m" else 390 if interval == "5m" else 130,
+                "1mo": 8000 if interval == "1m" else 1600 if interval == "5m" else 530,
+                "3mo": 90,
+                "6mo": 180,
+                "1y": 365,
+                "2y": 730
+            }
+            limit = period_limits.get(period, len(sorted_dates))
+
+            for date_str in sorted_dates[-limit:]:
+                candle = time_series[date_str]
+
+                # Format date
+                if interval in ["1m", "5m", "15m"]:
+                    dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                    dates.append(dt.strftime('%Y-%m-%d %H:%M'))
+                else:
+                    dates.append(date_str)
+
+                opens.append(float(candle["1. open"]))
+                highs.append(float(candle["2. high"]))
+                lows.append(float(candle["3. low"]))
+                closes.append(float(candle["4. close"]))
+                volumes.append(int(candle["5. volume"]))
+
+            if not closes:
+                return None
+
+            current_price = closes[-1]
+            prev_price = closes[-2] if len(closes) > 1 else current_price
+
+            # Get company info if available
+            company_name = MarketDataService.STOCK_DATA.get(symbol, {}).get("name", symbol)
+            sector = MarketDataService.STOCK_DATA.get(symbol, {}).get("sector", "N/A")
+
+            return {
+                "symbol": symbol,
+                "current_price": current_price,
+                "previous_close": prev_price,
+                "change_percent": round((current_price - prev_price) / prev_price * 100, 2),
+                "volume": volumes[-1] if volumes else 0,
+                "high_52w": max(highs),
+                "low_52w": min(lows),
+                "company_name": company_name,
+                "sector": sector,
+                "historical_data": {
+                    "Date": dates,
+                    "Open": opens,
+                    "High": highs,
+                    "Low": lows,
+                    "Close": closes,
+                    "Volume": volumes
+                },
+                "data_source": "alpha_vantage"
+            }
+
+        except requests.exceptions.Timeout:
+            print("Alpha Vantage timeout")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"Alpha Vantage request failed: {e}")
+            return None
+        except Exception as e:
+            print(f"Alpha Vantage error: {e}")
+            return None
+
+    @staticmethod
+    def try_yahoo_finance(symbol: str, period: str = "1mo", interval: str = "1d") -> Optional[Dict]:
         """Try to fetch from Yahoo Finance first"""
         try:
             hist = yf.download(symbol, period=period, interval=interval, progress=False, timeout=5)
@@ -199,19 +343,24 @@ class MarketDataService:
 
     @staticmethod
     def get_market_data(symbol: str, period: str = "1mo", interval: str = "1d") -> Dict:
-        """Get market data - try Yahoo Finance first, fall back to generated data"""
+        """Get market data - try multiple sources in order of preference"""
         print(f"📊 Fetching market data for {symbol} ({interval} interval)...")
 
-        # Try Yahoo Finance first
-        data = MarketDataService.try_yahoo_finance(symbol, period, interval)
+        # Try Alpha Vantage first (REAL data)
+        data = MarketDataService.try_alpha_vantage(symbol, period, interval)
+        if data:
+            print(f"✅ Got REAL data from Alpha Vantage for {symbol}")
+            return data
 
+        # Try Yahoo Finance as fallback
+        data = MarketDataService.try_yahoo_finance(symbol, period, interval)
         if data:
             print(f"✅ Got real data from Yahoo Finance for {symbol}")
             return data
 
-        # Fall back to generated data
-        print(f"⚠️  Yahoo Finance unavailable, generating realistic data for {symbol}")
+        # Last resort: generated data
+        print(f"⚠️  All real data sources unavailable, generating simulated data for {symbol}")
         data = MarketDataService.generate_realistic_data(symbol, period, interval)
-        print(f"✅ Generated realistic market data for {symbol}: ${data['current_price']:.2f} ({interval})")
+        print(f"✅ Generated simulated market data for {symbol}: ${data['current_price']:.2f} ({interval})")
 
         return data
